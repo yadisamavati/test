@@ -1,0 +1,244 @@
+using System;
+using System.Windows.Forms;
+using System.Threading;
+
+/// //////////////////////////////
+using System;
+using System.Net;
+using System.Net.Sockets;
+
+namespace WFA_UDPtest
+{
+    class UDP
+    {
+        private UdpClient udpClient;
+        private Byte[] receiveBytes;
+        private Byte[] sendBytes;
+
+        public void CreateUDPSecket(string inRemoteIP, int RemotePort, int LocalPort)
+        {
+            IPHostEntry host;
+            string hostname = "d.mx.mail.yahoo.com";
+            host = Dns.GetHostEntry(hostname);
+            //inRemoteIP = host.AddressList[0].ToString();
+            if (udpClient == null)
+            {
+                udpClient = new UdpClient(LocalPort);
+                try
+                {
+                    IPAddress RemoteIP = IPAddress.Parse(inRemoteIP);
+                    udpClient.Connect(RemoteIP, RemotePort);
+                }
+                catch (Exception Error)
+                {
+                    Console.WriteLine(Error.ToString());
+                    udpClient.Close();
+                }
+            }//end if
+        }//end method
+
+        public void Send(Byte[] sendBytes)
+        {
+            // Sends a message to the host to which you have connected.
+            udpClient.Send(sendBytes, sendBytes.Length);
+        }//end method
+        public void SendString(String strData)
+        {
+            sendBytes = new byte[strData.Length];
+            for (int i = 0; i < strData.Length; i++)
+                sendBytes[i] = (Byte)strData[i];
+            // Sends a message to the host to which you have connected.
+            udpClient.Send(sendBytes, sendBytes.Length);
+        }//end method
+
+        public byte[] Receive()
+        {
+            IPAddress localAddress = IPAddress.Any;
+            IPEndPoint RemoteIpEndPoint = new IPEndPoint(localAddress, 0);
+
+            receiveBytes = udpClient.Receive(ref RemoteIpEndPoint);
+            return receiveBytes;
+        }//end method
+
+        public void Close()
+        {
+            if (udpClient != null)
+                udpClient.Close();
+            udpClient = null;
+        }//end method
+
+    }//end class
+
+}//end namespace
+
+/// ///////////////////////////////
+
+namespace WFA_UDPtest
+{
+    public partial class Form1 : Form
+    {
+        UDP udp = null;
+        Thread thdUDPServer = null;
+  
+        string RemoteIP = "";
+        int RemotePort = 0;
+        int LocalPort = 0;
+
+        public Form1()
+        {
+            InitializeComponent();
+        }
+
+        private void Form1_Load(object sender, EventArgs e)
+        {
+            cbIP.Items.Add("localhost");
+            cbIP.Items.Add("192.168.1.1");
+            cbIP.Items.Add("10.200.99.86"); 
+            cbIP.Items.Add("216.58.195.131");//GO
+
+            cbPort.Items.Add("6000");
+ 
+            cbCommand.Items.Add("HI");
+            cbCommand.Items.Add("Hello World");
+            cbCommand.Items.Add("BY");
+            cbCommand.Items.Add("Command");
+
+            cbIP.Text = "216.58.195.131";
+            cbPort.Text = "6000";
+            cbCommand.Text = "HI";
+
+            udp = new UDP();
+
+            thdUDPServer = new Thread(new
+            ThreadStart(RXThread));
+            thdUDPServer.IsBackground = true;
+
+        }//end method
+
+　
+        private string ToHexString(byte[] data)
+        {
+            byte b;
+            int i, j, k;
+            int l = data.Length;
+            char[] r = new char[l * 2];
+            for (i = 0, j = 0; i < l; ++i)
+            {
+                b = data[i];
+                k = b >> 4;
+                r[j++] = (char)(k > 9 ? k + 0x37 : k + 0x30);
+                k = b & 15;
+                r[j++] = (char)(k > 9 ? k + 0x37 : k + 0x30);
+            }
+            return new string(r);
+        }//end method
+
+        private void bExit_Click(object sender, EventArgs e)
+        {
+            Application.Exit();
+        }//end method
+
+        public void RXThread()
+        {
+            Byte[] receiveBytes = new Byte[50];
+            while (true)
+            {
+                receiveBytes = udp.Receive();
+                string s = ToHexString(receiveBytes);
+
+                this.UIThread(() => this.lbConnections.Items.Add(s));
+            }
+        }//end method
+
+        private byte[] UDPReveive()
+        {
+            Byte[] receiveBytes = new Byte[50];
+            receiveBytes = udp.Receive();
+            string s = ToHexString(receiveBytes);
+            this.UIThread(() => this.lbConnections.Items.Add(s));
+            return receiveBytes;
+        }//end method
+
+         private void bListen_Click(object sender, EventArgs e)
+         {
+             if (bListen.Text == "Listen")
+             {
+                 bListen.Text = "Close";
+                 if (cbIP.Text == "localhost")
+                     RemoteIP = "127.0.0.1";
+                 else
+                     RemoteIP = cbIP.Text;
+                 RemotePort = Convert.ToInt32(cbPort.Text);
+                 LocalPort = RemotePort + 1;
+
+                 try
+                 {
+                     udp.Close();
+
+                     //if (udp != null)
+                         udp.CreateUDPSecket(RemoteIP, RemotePort, LocalPort);
+                     thdUDPServer = new Thread(new
+                     ThreadStart(RXThread));
+                     thdUDPServer.IsBackground = true;
+                     thdUDPServer.Start();
+                    button1.Enabled = true;
+                 }
+                 catch (Exception Error)
+                 {
+                     Console.WriteLine(Error.ToString());
+                     udp.Close();
+                     thdUDPServer.Abort();
+                     bListen.Text = "Listen";
+                 }
+             }
+             else
+             {
+                 bListen.Text = "Listen";
+                 thdUDPServer.Abort();
+                 udp.Close();
+                 
+             }//end if/else
+         }
+
+          private void cbIP_SelectedIndexChanged(object sender, EventArgs e)
+         {
+             if (udp != null)
+             {
+                 udp.Close();
+                 thdUDPServer.Abort();
+             }
+             bListen.Text = "Listen";
+         }//end method
+
+        private void button1_Click(object sender, EventArgs e)
+        {
+            update();
+//            update1();
+        }//end method
+        private void update()
+        {
+            udp.SendString("Hi");
+        }//end method
+        private void update1()
+        {
+            DateTime localDateTime = DateTime.Now;
+            double dt = DateTimeToUnixTimestamp(localDateTime);            
+            tbCommandValue.Text = UnixTimestampToDateTime(dt).ToString();
+        }//end method
+
+        public static DateTime UnixTimestampToDateTime(double unixTime)
+        {
+            DateTime unixStart = new DateTime(1970, 1, 1, 0, 0, 0, 0, System.DateTimeKind.Utc);
+            long unixTimeStampInTicks = (long)(unixTime * TimeSpan.TicksPerSecond);
+            return new DateTime(unixStart.Ticks + unixTimeStampInTicks, System.DateTimeKind.Utc);
+        }
+
+        public static double DateTimeToUnixTimestamp(DateTime dateTime)
+        {
+            DateTime unixStart = new DateTime(1970, 1, 1, 0, 0, 0, 0, System.DateTimeKind.Utc);
+            long unixTimeStampInTicks = (dateTime.ToUniversalTime() - unixStart).Ticks;
+            return (double)unixTimeStampInTicks / TimeSpan.TicksPerSecond;
+        }
+    }//end class
+
+}//end namespace
