@@ -1,2 +1,72 @@
 This is a test file.
-Learning to Create a project
+Learning to Create a project{
+      http: // publicIP : externalport /
+
+ //   UPnP upnp = null;
+ //   upnp = new UPnP();
+
+    //   upnp.ListMappings();
+
+    //IStaticPortMappingCollection::Add */
+    class UPnP
+    {
+        UPnPNAT NatMgr;
+        IStaticPortMappingCollection mappings;
+        public UPnP()
+        {
+            NatMgr = new UPnPNAT();
+            mappings = NatMgr.StaticPortMappingCollection;
+        }
+
+        internal void AddMappings(int remotePort, String ConnectionType,  string LocalComputerIP,  int localComputerPort, String LocalComputerDescription)
+        {
+            // Here's an example of opening up TCP Port 80 to forward to a specific Computer on the Private Network
+            // Here's an example of forwarding the UDP traffic of Internet Port 80 to Port 8080 on a Computer on the Private Network
+            mappings.Add(remotePort, ConnectionType, localComputerPort, LocalComputerIP, true, LocalComputerDescription);
+        }
+        internal void RemoveMappings(int remotePort, String ConnectionType)
+        {
+            // Remove TCP forwarding for Port 80
+            // Remove UDP forwarding for Port 8080
+            mappings.Remove(remotePort, ConnectionType);
+        }
+
+　
+        internal void ListMappings()
+        {
+            if (NatMgr == null)
+            {
+                Console.WriteLine("Initialization failed creating Windows UPnPNAT interface.");
+                return;
+            }
+ 
+            
+            if (mappings == null)
+            {
+                Console.WriteLine("No mappings found. Do you have a uPnP enabled router as your gateway ? ");
+               return;
+            }
+            if (mappings.Count == 0)
+            {
+                Console.WriteLine("Router does not have any active uPnP mappings.");
+            }
+
+           
+
+ /*
+            int n = mappings.Count;
+            int i = 0;
+            foreach (IStaticPortMapping pm in mappings)
+            {
+                Console.WriteLine("Description:");
+                Console.WriteLine(pm.Description);
+                Console.WriteLine(" {0}:{1}  --->  {2}:{3} ({4})", pm.ExternalIPAddress, 
+                pm.ExternalPort, pm.InternalClient, pm.InternalPort, pm.Protocol);
+                Console.WriteLine("");
+                if (++i == n)
+                    break;
+            }
+*/
+        }
+
+    }//end class
