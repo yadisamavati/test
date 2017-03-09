@@ -1,0 +1,50 @@
+               while (true)37                {38                    while (!stream.DataAvailable) ;3940                    Byte[] bytes = new Byte[client.Available];4142                    stream.Read(bytes, 0, bytes.Length);43                }//end while44            }//end if/else45        }//end method4647    }//end class48}//end namespace4950
+using System;
+using System.Net;
+using System.Net.Sockets;
+
+namespace WFA_UPnP
+{
+    class UDP_Server
+    {
+        TcpListener server;
+        TcpClient client;
+        public UDP_Server()
+        {
+            server = new TcpListener(IPAddress.Parse("10.200.99.86"), 80);
+
+            server.Start();
+            server.AllowNatTraversal(true);
+            Console.WriteLine("Server has started on 127.0.0.1:80.{0}Waiting for a connection...", Environment.NewLine);
+
+            client = server.AcceptTcpClient();
+
+            Console.WriteLine("A client connected.");
+        }
+
+        public void Receive()
+        {
+            if (!client.Connected)
+            {
+                //try to connect to a new client
+                client = server.AcceptTcpClient();
+            }
+            else
+            {
+                NetworkStream stream = client.GetStream();
+
+                //enter to an infinite cycle to be able to handle every change in stream
+                while (true)
+                {
+                    while (!stream.DataAvailable) ;
+
+                    Byte[] bytes = new Byte[client.Available];
+
+                    stream.Read(bytes, 0, bytes.Length);
+                }//end while
+            }//end if/else
+        }//end method
+
+    }//end class
+}//end namespace
+
