@@ -1,4 +1,395 @@
-               while (true)37                {38                    while (!stream.DataAvailable) ;3940                    Byte[] bytes = new Byte[client.Available];4142                    stream.Read(bytes, 0, bytes.Length);43                }//end while44            }//end if/else45        }//end method4647    }//end class48}//end namespace4950
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Net.Sockets;
+using System.Net;
+using System.Xml;
+using System.IO;
+
+namespace UPnPNAT
+{
+    class NAT
+    {
+        static TimeSpan _timeout = new TimeSpan(0, 0, 0, 3);
+        public static TimeSpan TimeOut
+        {
+            get { return _timeout; }
+            set { _timeout = value; }
+        }
+        static string _descUrl, _serviceUrl, _eventUrl;
+        public static bool Discover()
+        {
+            Socket s;
+            SocketPermission permission = new SocketPermission(NetworkAccess.Accept,
+                   TransportType.Tcp, "", SocketPermission.AllPorts);
+            //Socket s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            IPHostEntry ipHost = Dns.GetHostEntry(Dns.GetHostName());
+            try
+            {
+                IPAddress ipAddr = ipHost.AddressList[2];
+                s = new Socket(ipAddr.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+            }
+            catch (Exception e)
+            {
+                return(false);
+            }
+            string req = "";
+            if (IsSocketConnected(s))
+
+                s.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, 1);
+            else {
+            req = "M-SEARCH * HTTP/1.1\r\n" +
+            "HOST: 172.20.50.10:1900\r\n" +
+            //"HOST: 239.255.255.250:1900\r\n" +
+            "ST:upnp:rootdevice\r\n" +
+            "MAN:\"ssdp:discover\"\r\n" +
+            "MX:3\r\n\r\n";
+        }
+            byte[] data = Encoding.ASCII.GetBytes(req);
+            IPEndPoint ipe = new IPEndPoint(IPAddress.Broadcast, 1900);
+            byte[] buffer = new byte[0x1000];
+
+            DateTime start = DateTime.Now;
+
+            do
+            {
+                s.SendTo(data, ipe);
+                s.SendTo(data, ipe);
+                s.SendTo(data, ipe);
+
+                int length = 0;
+                do
+                {
+                    length = s.Receive(buffer);
+
+                    string resp = Encoding.ASCII.GetString(buffer, 0, length).ToLower();
+                    if (resp.Contains("upnp:rootdevice"))
+                    {
+                        resp = resp.Substring(resp.ToLower().IndexOf("location:") + 9);
+                        resp = resp.Substring(0, resp.IndexOf("\r")).Trim();
+                        if (!string.IsNullOrEmpty(_serviceUrl = GetServiceUrl(resp)))
+                        {
+                            _descUrl = resp;
+                            return true;
+                        }
+                    }
+                } while (length > 0);
+            } while (start.Subtract(DateTime.Now) < _timeout);
+            return false;
+        }
+
+        // Checks if the socket is connected
+        static bool IsSocketConnected(Socket s)
+        {
+            return !((s.Poll(1000, SelectMode.SelectRead) && (s.Available == 0)) || !s.Connected);
+        }
+
+        private static string GetServiceUrl(string resp)
+        {
+#if !DEBUG
+            try
+            {
+#endif
+            XmlDocument desc = new XmlDocument();
+            desc.Load(WebRequest.Create(resp).GetResponse().GetResponseStream());
+            XmlNamespaceManager nsMgr = new XmlNamespaceManager(desc.NameTable);
+            nsMgr.AddNamespace("tns", "urn:schemas-upnp-org:device-1-0");
+            XmlNode typen = desc.SelectSingleNode("//tns:device/tns:deviceType/text()", nsMgr);
+            if (!typen.Value.Contains("InternetGatewayDevice"))
+                return null;
+            XmlNode node = desc.SelectSingleNode("//tns:service[tns:serviceType=\"urn:schemas-upnp-org:service:WANIPConnection:1\"]/tns:controlURL/text()", nsMgr);
+            if (node == null)
+                return null;
+            XmlNode eventnode = desc.SelectSingleNode("//tns:service[tns:serviceType=\"urn:schemas-upnp-org:service:WANIPConnection:1\"]/tns:eventSubURL/text()", nsMgr);
+            _eventUrl = CombineUrls(resp, eventnode.Value);
+            return CombineUrls(resp, node.Value);
+#if !DEBUG
+            }
+            catch { return null; }
+#endif
+        }
+
+        private static string CombineUrls(string resp, string p)
+        {
+            int n = resp.IndexOf("://");
+            n = resp.IndexOf('/', n + 3);
+            return resp.Substring(0, n) + p;
+        }
+
+        public static void ForwardPort(int port, ProtocolType protocol, string description)
+        {
+            if (string.IsNullOrEmpty(_serviceUrl))
+                throw new Exception("No UPnP service available or Discover() has not been called");
+            XmlDocument xdoc = SOAPRequest(_serviceUrl, "<u:AddPortMapping xmlns:u=\"urn:schemas-upnp-org:service:WANIPConnection:1\">" +
+                "<NewRemoteHost></NewRemoteHost><NewExternalPort>" + port.ToString() + "</NewExternalPort><NewProtocol>" + protocol.ToString().ToUpper() + "</NewProtocol>" +
+                "<NewInternalPort>" + port.ToString() + "</NewInternalPort><NewInternalClient>" + Dns.GetHostAddresses(Dns.GetHostName())[0].ToString() +
+                "</NewInternalClient><NewEnabled>1</NewEnabled><NewPortMappingDescription>" + description +
+            "</NewPortMappingDescription><NewLeaseDuration>0</NewLeaseDuration></u:AddPortMapping>", "AddPortMapping");
+        }
+
+        public static void DeleteForwardingRule(int port, ProtocolType protocol)
+        {
+            if (string.IsNullOrEmpty(_serviceUrl))
+                throw new Exception("No UPnP service available or Discover() has not been called");
+            XmlDocument xdoc = SOAPRequest(_serviceUrl,
+            "<u:DeletePortMapping xmlns:u=\"urn:schemas-upnp-org:service:WANIPConnection:1\">" +
+            "<NewRemoteHost>" +
+            "</NewRemoteHost>" +
+            "<NewExternalPort>" + port + "</NewExternalPort>" +
+            "<NewProtocol>" + protocol.ToString().ToUpper() + "</NewProtocol>" +
+            "</u:DeletePortMapping>", "DeletePortMapping");
+        }
+
+        public static IPAddress GetExternalIP()
+        {
+            if (string.IsNullOrEmpty(_serviceUrl))
+                throw new Exception("No UPnP service available or Discover() has not been called");
+            XmlDocument xdoc = SOAPRequest(_serviceUrl, "<u:GetExternalIPAddress xmlns:u=\"urn:schemas-upnp-org:service:WANIPConnection:1\">" +
+            "</u:GetExternalIPAddress>", "GetExternalIPAddress");
+            XmlNamespaceManager nsMgr = new XmlNamespaceManager(xdoc.NameTable);
+            nsMgr.AddNamespace("tns", "urn:schemas-upnp-org:device-1-0");
+            string IP = xdoc.SelectSingleNode("//NewExternalIPAddress/text()", nsMgr).Value;
+            return IPAddress.Parse(IP);
+        }
+
+        private static XmlDocument SOAPRequest(string url, string soap, string function)
+        {
+            string req = "<?xml version=\"1.0\"?>" +
+            "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">" +
+            "<s:Body>" +
+            soap +
+            "</s:Body>" +
+            "</s:Envelope>";
+            WebRequest r = HttpWebRequest.Create(url);
+            r.Method = "POST";
+            byte[] b = Encoding.UTF8.GetBytes(req);
+            r.Headers.Add("SOAPACTION", "\"urn:schemas-upnp-org:service:WANIPConnection:1#" + function + "\"");
+            r.ContentType = "text/xml; charset=\"utf-8\"";
+            r.ContentLength = b.Length;
+            r.GetRequestStream().Write(b, 0, b.Length);
+            XmlDocument resp = new XmlDocument();
+            WebResponse wres = r.GetResponse();
+            Stream ress = wres.GetResponseStream();
+            resp.Load(ress);
+            return resp;
+        }
+    } // NAT
+} // namespace
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Net.Sockets;
+using System.Net;
+using System.Xml;
+using System.IO;
+using NATUPNPLib;
+
+namespace UPnPNAT
+{
+    class UPnP
+    {
+        UPnPNAT NatMgr;
+
+        IStaticPortMappingCollection mappings;
+
+        public UPnP()
+
+
+
+        {
+
+           NatMgr = new UPnPNAT();
+           mappings = NatMgr.StaticPortMappingCollection;
+        }
+
+
+        internal void AddMappings(int remotePort, String ConnectionType, string LocalComputerIP, int localComputerPort, String LocalComputerDescription)
+        {
+            // Here's an example of opening up TCP Port 80 to forward to a specific Computer on the Private Network
+
+            // Here's an example of forwarding the UDP traffic of Internet Port 80 to Port 8080 on a Computer on the Private Network
+
+            mappings.Add(remotePort, ConnectionType, localComputerPort, LocalComputerIP, true, LocalComputerDescription);
+        }
+
+        internal void RemoveMappings(int remotePort, String ConnectionType)
+        {
+            // Remove TCP forwarding for Port 80
+
+            // Remove UDP forwarding for Port 8080
+            mappings.Remove(remotePort, ConnectionType);
+
+        }
+
+        internal void ListMappings()
+        {
+            if (NatMgr == null)
+            {
+                Console.WriteLine("Initialization failed creating Windows UPnPNAT interface.");
+                return;
+            }
+
+            IStaticPortMappingCollection mappings = NatMgr.StaticPortMappingCollection;
+            if (mappings == null)
+            {
+                Console.WriteLine("No mappings found. 
+       
+               Do you have a uPnP enabled router as your gateway ? ");
+               return;
+            }
+            if (mappings.Count == 0)
+            {
+                Console.WriteLine("Router does not have any active uPnP mappings.");
+            }
+
+
+            int n = mappings.Count;
+            int i = 0;
+            foreach (IStaticPortMapping pm in mappings)
+            {
+                Console.WriteLine("Description:");
+                Console.WriteLine(pm.Description);
+                Console.WriteLine(" {0}:{1}  --->  {2}:{3} ({4})", pm.ExternalIPAddress, pm.ExternalPort, pm.InternalClient, pm.InternalPort, pm.Protocol);
+                Console.WriteLine("");
+                if (++i == n)
+                    break;
+            }
+
+        }
+
+
+    }//class UPnP
+}// naqmespace
+
+<Window x:Class="UPnPNAT.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:UPnPNAT"
+        mc:Ignorable="d"
+        Title="MainWindow" Height="350" Width="525">
+    <StackPanel>
+        <!-- Title Bar -->
+        <Grid Background="AliceBlue">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Replaced as Window Icon -->
+            <Rectangle Fill="Gold" Width="16" Height="16" Grid.Column="0"/>
+
+            <!-- Title Text -->
+            <TextBlock MouseLeftButtonDown="OnDragMoveWindow" Grid.Column="1">MainWindow</TextBlock>
+
+            <!-- Minimize Button -->
+            <Rectangle Fill="Yellow" Width="16" Height="16" Margin="1" HorizontalAlignment="Right"
+                       MouseLeftButtonUp="OnMinimizeWindow"
+                       Grid.Column="2"/>
+
+            <!-- Maximize Button -->
+            <Rectangle Fill="Blue" Width="16" Height="16" Margin="1" HorizontalAlignment="Right"
+                       MouseLeftButtonUp="OnMaximizeWindow"
+                       Grid.Column="3"/>
+
+            <!-- Close Button -->
+            <Rectangle Fill="Red" Width="16" Height="16" Margin="1" HorizontalAlignment="Right"
+                       MouseLeftButtonUp="OnCloseWindow"
+                       Grid.Column="4"/>
+        </Grid>
+        <UniformGrid x:Name="grid">
+
+        </UniformGrid>
+
+    </StackPanel>
+
+</Window>
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Documents;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Navigation;
+using System.Windows.Shapes;
+
+namespace UPnPNAT
+{
+    /// <summary>
+    /// Interaction logic for MainWindow.xaml
+    /// </summary>
+    public partial class MainWindow : Window
+    {
+        public MainWindow()
+        {
+            InitializeComponent();
+
+            for (int i = 0; i < 10; ++i)
+            {
+                Button button = new Button()
+                {
+                    Content = string.Format("Button for {0}", i),
+                    Tag = i
+                };
+                button.Click += new RoutedEventHandler(button_Click);
+                this.grid.Children.Add(button);
+            }
+            try
+            {
+                Console.WriteLine(UPnPNAT.NAT.Discover());
+                Console.WriteLine(string.Format("You have an UPnP-enabled router and your IP is: " + UPnPNAT.NAT.GetExternalIP() ));
+            }
+            catch
+            {
+                Console.WriteLine(string.Format("You do not have an UPnP-enabled router."));
+            }
+
+        }// MainWindow
+
+        void button_Click(object sender, RoutedEventArgs e)
+        {
+            Console.WriteLine(string.Format("You clicked on the {0}. button.", (sender as Button).Tag));
+        }
+        private void OnDragMoveWindow(object sender, MouseButtonEventArgs e)
+        {
+            this.DragMove();
+        }
+        private void OnMinimizeWindow(object sender, MouseButtonEventArgs e)
+        {
+            this.WindowState = WindowState.Minimized;
+        }
+        private void OnMaximizeWindow(object sender, MouseButtonEventArgs e)
+        {
+            if (this.WindowState == WindowState.Maximized)
+                this.WindowState = WindowState.Normal;
+            else if (this.WindowState == WindowState.Normal)
+                this.WindowState = WindowState.Maximized;
+        }
+        private void OnCloseWindow(object sender, MouseButtonEventArgs e)
+        {
+            this.Close();
+        }
+
+    }// class MainWindow : Window
+
+}// namespace
+
 using System;
 using System.Net;
 using System.Net.Sockets;
